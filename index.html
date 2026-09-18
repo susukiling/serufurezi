@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="ja" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>バーコード・QRマネージャー</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- ZXing Barcode Scanner Library (バージョン固定: decodeFromConstraints を利用するため) -->
+    <script type="text/javascript" src="https://unpkg.com/@zxing/library@0.20.0"></script>
+    <!-- JsBarcode for generating linear barcodes -->
+    <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+    <!-- QRCode.js for generating QR codes -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <!-- Google スプレッドシート(GAS)連携用の共通APIクライアント -->
+    <script src="gas-api.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        /* Custom Dark Scrollbars */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #090d16;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #1e293b;
+            border-radius: 9999px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #334155;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 h-full flex flex-col">
+
+    <header class="bg-slate-900/90 backdrop-blur-md border-b border-slate-800 text-white shadow-lg sticky top-0 z-40">
+        <div class="max-w-7xl mx-auto px-4 py-4 flex flex-col sm:flex-row justify-between items-center gap-3">
+            <div class="flex items-center space-x-3">
+                <div class="p-2.5 bg-indigo-500/10 text-indigo-400 rounded-xl border border-indigo-500/20">
+                    <i data-lucide="scan-line" class="w-6 h-6"></i>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold tracking-tight text-slate-100">バーコード・QR マネージャー</h1>
+                    <p class="text-xs text-slate-400">Google スプレッドシート連携システム (ダークモード対応)</p>
+                </div>
+            </div>
+            <div class="flex items-center space-x-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800 text-sm">
+                <button onclick="switchTab('scanner')" id="tab-scanner" class="px-4 py-2 rounded-lg font-medium transition flex items-center gap-2 bg-indigo-600 text-white shadow-md shadow-indigo-600/30">
+                    <i data-lucide="camera" class="w-4 h-4"></i> スキャン・読取
+                </button>
+                <button onclick="switchTab('generator')" id="tab-generator" class="px-4 py-2 rounded-lg font-medium transition flex items-center gap-2 text-slate-400 hover:text-white hover:bg-slate-800/50">
+                    <i data-lucide="qr-code" class="w-4 h-4"></i> 作成
+                </button>
+                <button onclick="switchTab('database')" id="tab-database" class="px-4 py-2 rounded-lg font-medium transition flex items-center gap-2 text-slate-400 hover:text-white hover:bg-slate-800/50">
+                    <i data-lucide="database" class="w-4 h-4"></i> スプレッドシート一覧
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 py-6 overflow-y-auto">
+        
+        <!-- Toast Notifications -->
+        <div id="toast" class="fixed bottom-5 right-5 z-50 transform translate-y-20 opacity-0 transition-all duration-300 max-w-md bg-slate-900/95 backdrop-blur-md text-white px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 border border-slate-800">
+            <span id="toast-icon"></span>
+            <span id="toast-message" class="text-sm font-medium"></span>
+        </div>
+
+        <!-- ================= SCANNER TAB ================= -->
+        <section id="section-scanner" class="space-y-6">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Camera Viewfinder Column -->
+                <div class="lg:col-span-2 bg-slate-900/80 backdrop-blur rounded-2xl shadow-xl border border-slate-800 p-6 flex flex-col">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-lg font-semibold text-slate-100 flex items-center gap-2">
+                            <i data-lucide="video" class="w-5 h-5 text-indigo-400"></i> カメラライブスキャン
+                        </h2>
+                        <div class="flex items-center gap-2">
+                            <select id="camera-select" class="text-xs bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500">
+                                <option value="">カメラを選択...</option>
+                            </select>
+                            <button onclick="toggleScanner()" id="scan-toggle-btn" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-4 py-2 rounded-lg font-medium transition shadow-md shadow-indigo-600/30 flex items-center gap-1.5">
+                                <i data-lucide="play" class="w-3.5 h-3.5"></i> 開始
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="relative flex-1 bg-slate-950 rounded-xl border border-slate-800 overflow-hidden min-h-[300px] flex items-center justify-center">
+                        <video id="video-preview" class="w-full h-full object-cover" playsinline webkit-playsinline muted autoplay></video>
+                        <div id="scanner-overlay" class="absolute inset-0 border-2 border-dashed border-indigo-500/50 m-12 rounded-xl pointer-events-none flex items-center justify-center">
+                            <div class="text-indigo-300 text-xs bg-slate-900/90 px-3 py-1.5 rounded-full border border-indigo-500/30 font-medium">
+                                中央にコードを合わせてください
+                            </div>
+                        </div>
+                        <div id="scanner-placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-slate-500 p-6 text-center bg-slate-950">
+                            <i data-lucide="camera-off" class="w-12 h-12 mb-2 opacity-40"></i>
+                            <p class="text-sm font-medium text-slate-400">「開始」ボタンを押してカメラを起動してください</p>
+                        </div>
+                    </div>
+
+                    <div class="mt-4 pt-4 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
+                        <span>対応形式: QRコード, JAN/EAN, Code128, ITFなど</span>
+                        <label class="cursor-pointer bg-slate-800/80 hover:bg-slate-800 text-slate-200 px-3 py-1.5 rounded-lg border border-slate-700/80 transition font-medium flex items-center gap-1.5">
+                            <i data-lucide="upload" class="w-3.5 h-3.5 text-indigo-400"></i> 画像ファイルから読取
+                            <input type="file" id="image-file-input" accept="image/*" class="hidden" onchange="decodeImageFile(event)">
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Registration / Naming Column -->
+                <div class="bg-slate-900/80 backdrop-blur rounded-2xl shadow-xl border border-slate-800 p-6 flex flex-col justify-between">
+                    <div>
+                        <h2 class="text-lg font-semibold text-slate-100 flex items-center gap-2 mb-4">
+                            <i data-lucide="tag" class="w-5 h-5 text-indigo-400"></i> 詳細・価格・シート登録
+                        </h2>
+                        
+                        <form id="save-form" onsubmit="handleFormSubmit(event)" class="space-y-4">
+                            <div>
+                                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">読み取りコード</label>
+                                <div class="flex gap-2">
+                                    <input type="text" id="input-code" required placeholder="コードがここに表示されます" class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm font-mono text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500">
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">コード種別</label>
+                                <select id="input-type" class="w-full bg-slate-950 border border-slate-800 text-slate-100 rounded-xl px-3.5 py-2.5 text-sm font-mono focus:outline-none focus:border-indigo-500">
+                                    <option value="QR_CODE">QR_CODE (QRコード)</option>
+                                    <option value="EAN_13">EAN_13 (JAN 13桁)</option>
+                                    <option value="EAN_8">EAN_8 (JAN 8桁)</option>
+                                    <option value="CODE_128">CODE_128</option>
+                                    <option value="CODE_39">CODE_39</option>
+                                    <option value="UPC_A">UPC_A</option>
+                                    <option value="UPC_E">UPC_E</option>
+                                    <option value="ITF">ITF</option>
+                                    <option value="DATA_MATRIX">DATA_MATRIX</option>
+                                    <option value="OTHER">OTHER (その他)</option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">アイテム名 <span class="text-rose-400">*</span></label>
+                                <input type="text" id="input-name" required placeholder="例: 商品A, 備品PC-01" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500">
+                            </div>
+
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">カテゴリ</label>
+                                    <select id="input-category" class="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:border-indigo-500">
+                                        <option value="在庫・商品">在庫・商品</option>
+                                        <option value="固定資産・備品">固定資産・備品</option>
+                                        <option value="書類・ファイル">書類・ファイル</option>
+                                        <option value="ロケーション">ロケーション</option>
+                                        <option value="その他">その他</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">価格 (円)</label>
+                                    <input type="number" id="input-price" min="0" value="0" placeholder="0" class="w-full bg-slate-950 border border-slate-800 text-slate-100 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:border-indigo-500">
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">メモ・備考</label>
+                                <textarea id="input-notes" rows="2" placeholder="詳細情報や保管場所など" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500"></textarea>
+                            </div>
+
+                            <button type="submit" id="save-btn" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-medium py-3 rounded-xl transition shadow-lg shadow-indigo-600/20 flex items-center justify-center gap-2">
+                                <i data-lucide="cloud-upload" class="w-4 h-4"></i> スプレッドシートに保存
+                            </button>
+                        </form>
+                    </div>
+
+                    <div class="mt-6 pt-4 border-t border-slate-800 bg-indigo-950/20 border-indigo-500/10 p-3 rounded-xl">
+                        <p class="text-xs text-indigo-300 flex items-center gap-1.5 font-medium">
+                            <i data-lucide="info" class="w-4 h-4 shrink-0 text-indigo-400"></i> スプレッドシートの同名コードは自動更新されます。
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ================= GENERATOR TAB ================= -->
+        <section id="section-generator" class="hidden space-y-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Generator Controls -->
+                <div class="bg-slate-900/80 backdrop-blur rounded-2xl shadow-xl border border-slate-800 p-6 space-y-4">
+                    <h2 class="text-lg font-semibold text-slate-100 flex items-center gap-2">
+                        <i data-lucide="wand-2" class="w-5 h-5 text-indigo-400"></i> バーコード・QRコード作成
+                    </h2>
+
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">作成形式</label>
+                        <div class="grid grid-cols-2 gap-3">
+                            <button type="button" onclick="setGenType('qr')" id="btn-type-qr" class="py-2.5 px-4 rounded-xl border-2 font-medium text-sm transition flex items-center justify-center gap-2 border-indigo-500 bg-indigo-500/10 text-indigo-300">
+                                <i data-lucide="qr-code" class="w-4 h-4"></i> QRコード
+                            </button>
+                            <button type="button" onclick="setGenType('barcode')" id="btn-type-barcode" class="py-2.5 px-4 rounded-xl border-2 font-medium text-sm transition flex items-center justify-center gap-2 border-slate-800 bg-slate-950 text-slate-400 hover:border-slate-700">
+                                <i data-lucide="bar-chart-2" class="w-4 h-4"></i> バーコード
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="barcode-format-container" class="hidden">
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">バーコード規格</label>
+                        <select id="gen-barcode-format" class="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:border-indigo-500">
+                            <option value="CODE128">CODE128 (英数字・記号)</option>
+                            <option value="EAN13">EAN-13 (JANコード 13桁)</option>
+                            <option value="UPC">UPC (12桁)</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">コード化するテキスト・数値 <span class="text-rose-400">*</span></label>
+                        <input type="text" id="gen-text" placeholder="例: 4901330000000 または URL" class="w-full bg-slate-950 border border-slate-800 text-slate-100 rounded-xl px-3.5 py-2.5 text-sm placeholder-slate-600 focus:outline-none focus:border-indigo-500" oninput="generatePreview()">
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">アイテム名 (ラベル用)</label>
+                        <input type="text" id="gen-name" placeholder="例: 新商品お菓子" class="w-full bg-slate-950 border border-slate-800 text-slate-100 rounded-xl px-3.5 py-2.5 text-sm placeholder-slate-600 focus:outline-none focus:border-indigo-500" oninput="generatePreview()">
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">カテゴリ</label>
+                            <select id="gen-category" class="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:border-indigo-500">
+                                <option value="在庫・商品">在庫・商品</option>
+                                <option value="固定資産・備品">固定資産・備品</option>
+                                <option value="書類・ファイル">書類・ファイル</option>
+                                <option value="ロケーション">ロケーション</option>
+                                <option value="その他">その他</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">価格 (円)</label>
+                            <input type="number" id="gen-price" min="0" value="0" class="w-full bg-slate-950 border border-slate-800 text-slate-100 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:border-indigo-500">
+                        </div>
+                    </div>
+
+                    <div class="pt-2 flex gap-3">
+                        <button onclick="saveGeneratedItem()" class="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-medium py-3 rounded-xl transition shadow-lg shadow-indigo-600/20 flex items-center justify-center gap-2">
+                            <i data-lucide="cloud-upload" class="w-4 h-4"></i> シートに登録
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Generator Preview Card -->
+                <div class="bg-slate-900/80 backdrop-blur rounded-2xl shadow-xl border border-slate-800 p-6 flex flex-col items-center justify-center text-center">
+                    <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-6 self-start">作成プレビュー</h3>
+                    
+                    <div id="preview-card" class="bg-slate-950 border border-slate-800 rounded-2xl p-6 shadow-xl w-full max-w-sm flex flex-col items-center space-y-4">
+                        <div class="w-full flex justify-between items-center">
+                            <div id="preview-name-display" class="font-bold text-slate-100 text-base">プレビュー名</div>
+                            <div id="preview-price-display" class="font-bold text-indigo-400 text-sm">¥0</div>
+                        </div>
+                        
+                        <!-- White background wrapper for optimal code scanning readability -->
+                        <div class="bg-white p-4 rounded-xl border border-slate-200 flex items-center justify-center min-h-[180px] w-full shadow-inner">
+                            <div id="qrcode-container"></div>
+                            <canvas id="barcode-canvas" class="hidden max-w-full"></canvas>
+                            <div id="preview-placeholder" class="text-xs text-slate-400">テキストを入力してください</div>
+                        </div>
+
+                        <div id="preview-code-display" class="font-mono text-xs text-slate-300 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg">---</div>
+                    </div>
+
+                    <div class="mt-6 flex gap-3 w-full max-w-sm">
+                        <button onclick="downloadCodeImage()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium py-2.5 rounded-xl transition text-sm flex items-center justify-center gap-2 border border-slate-700/60">
+                            <i data-lucide="download" class="w-4 h-4 text-indigo-400"></i> 画像保存
+                        </button>
+                        <button onclick="window.print()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium py-2.5 rounded-xl transition text-sm flex items-center justify-center gap-2 border border-slate-700/60">
+                            <i data-lucide="printer" class="w-4 h-4 text-indigo-400"></i> 印刷
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ================= DATABASE TAB ================= -->
+        <section id="section-database" class="hidden space-y-6">
+            <div class="bg-slate-900/80 backdrop-blur rounded-2xl shadow-xl border border-slate-800 p-6 space-y-4">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                    <div>
+                        <h2 class="text-lg font-semibold text-slate-100 flex items-center gap-2">
+                            <i data-lucide="database" class="w-5 h-5 text-indigo-400"></i> スプレッドシート同期データ
+                        </h2>
+                        <p class="text-xs text-slate-400">Google スプレッドシートに保存されたアイテム一覧（価格情報付き）</p>
+                    </div>
+                    <div class="flex items-center gap-2 w-full sm:w-auto">
+                        <input type="text" id="search-filter" placeholder="検索 (名前・コード)..." oninput="filterDatabase()" class="bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 rounded-xl px-3.5 py-2 text-sm focus:outline-none focus:border-indigo-500 flex-1 sm:w-64">
+                        <button onclick="loadDatabase()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 p-2.5 rounded-xl border border-slate-700/60 transition" title="更新">
+                            <i data-lucide="refresh-cw" class="w-4 h-4 text-indigo-400"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="overflow-x-auto rounded-xl border border-slate-800">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="bg-slate-950 text-slate-400 text-xs uppercase tracking-wider border-b border-slate-800">
+                                <th class="p-3.5 font-semibold">タイムスタンプ</th>
+                                <th class="p-3.5 font-semibold">コード</th>
+                                <th class="p-3.5 font-semibold">種類</th>
+                                <th class="p-3.5 font-semibold">アイテム名</th>
+                                <th class="p-3.5 font-semibold">カテゴリ</th>
+                                <th class="p-3.5 font-semibold">価格</th>
+                                <th class="p-3.5 font-semibold">メモ</th>
+                                <th class="p-3.5 font-semibold text-right">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="database-tbody" class="divide-y divide-slate-800/80 text-sm">
+                            <tr>
+                                <td colspan="8" class="p-8 text-center text-slate-500">データを読み込んでいます...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <script>
+        // Initialize Lucide icons
+        lucide.createIcons();
+
+        // Application State
+        let currentTab = 'scanner';
+        let codeReader = null;
+        let selectedDeviceId = null;
+        let isScanning = false;
+        let genType = 'qr';
+        let dbItems = [];
+
+        // Tab Switching
+        function switchTab(tabId) {
+            currentTab = tabId;
+            ['scanner', 'generator', 'database'].forEach(t => {
+                const sec = document.getElementById(`section-${t}`);
+                const btn = document.getElementById(`tab-${t}`);
+                if (t === tabId) {
+                    sec.classList.remove('hidden');
+                    btn.className = "px-4 py-2 rounded-lg font-medium transition flex items-center gap-2 bg-indigo-600 text-white shadow-md shadow-indigo-600/30";
+                } else {
+                    sec.classList.add('hidden');
+                    btn.className = "px-4 py-2 rounded-lg font-medium transition flex items-center gap-2 text-slate-400 hover:text-white hover:bg-slate-800/50";
+                }
+            });
+
+            if (tabId !== 'scanner') stopScanner();
+            if (tabId === 'database') loadDatabase();
+            if (tabId === 'generator') generatePreview();
+        }
+
+        // Toast Notification System
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            const msg = document.getElementById('toast-message');
+            const icon = document.getElementById('toast-icon');
+
+            msg.textContent = message;
+            icon.innerHTML = type === 'success' 
+                ? '<svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>'
+                : '<svg class="w-5 h-5 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>';
+
+            toast.classList.remove('translate-y-20', 'opacity-0');
+            setTimeout(() => {
+                toast.classList.add('translate-y-20', 'opacity-0');
+            }, 3500);
+        }
+
+        // ================= ZXing Camera Scanner =================
+        window.addEventListener('load', () => {
+            try {
+                codeReader = new ZXing.BrowserMultiFormatReader();
+                codeReader.listVideoInputDevices()
+                    .then(videoInputDevices => {
+                        const select = document.getElementById('camera-select');
+                        select.innerHTML = '';
+                        if (videoInputDevices.length === 0) {
+                            select.innerHTML = '<option value="">カメラが見つかりません</option>';
+                            return;
+                        }
+                        videoInputDevices.forEach(device => {
+                            const option = document.createElement('option');
+                            option.value = device.deviceId;
+                            option.text = device.label || `カメラ ${select.length + 1}`;
+                            select.appendChild(option);
+                        });
+                        selectedDeviceId = videoInputDevices[0].deviceId;
+                        select.onchange = (e) => { selectedDeviceId = e.target.value; if(isScanning) { stopScanner(); startScanner(); } };
+                    })
+                    .catch(err => console.error(err));
+            } catch (e) {
+                console.error("ZXing initialization error:", e);
+            }
+        });
+
+        function toggleScanner() {
+            if (isScanning) {
+                stopScanner();
+            } else {
+                startScanner();
+            }
+        }
+
+        // iOS/iPadOS Safari向けのカメラエラーメッセージ変換
+        function cameraErrorMessage(err) {
+            if (!window.isSecureContext) {
+                return 'カメラを使うにはHTTPS（安全な接続）でアクセスする必要があります。';
+            }
+            if (err && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')) {
+                return 'カメラの使用が許可されていません。Safariの「設定」→「Webサイトの設定」→対象サイトのカメラ許可をご確認ください。';
+            }
+            if (err && (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError')) {
+                return 'カメラが見つかりませんでした。';
+            }
+            if (err && (err.name === 'NotReadableError' || err.name === 'TrackStartError')) {
+                return 'カメラが他のアプリで使用中の可能性があります。';
+            }
+            return 'カメラの起動に失敗しました。';
+        }
+
+        async function startScanner() {
+            if (!codeReader) return;
+            const placeholder = document.getElementById('scanner-placeholder');
+            const toggleBtn = document.getElementById('scan-toggle-btn');
+
+            const constraints = selectedDeviceId
+                ? { video: { deviceId: { exact: selectedDeviceId } } }
+                : { video: { facingMode: 'environment' } };
+
+            // iPad Safariでは、ユーザー操作(タップ)の直後に明示的にgetUserMediaを
+            // 呼び出すことで、許可ポップアップが確実に表示されるようにしています。
+            try {
+                const permStream = await navigator.mediaDevices.getUserMedia(constraints);
+                permStream.getTracks().forEach(track => track.stop());
+            } catch (permErr) {
+                console.error('Camera permission error:', permErr);
+                showToast(cameraErrorMessage(permErr), 'error');
+                return;
+            }
+
+            placeholder.classList.add('hidden');
+            isScanning = true;
+            toggleBtn.innerHTML = '<i data-lucide="square" class="w-3.5 h-3.5"></i> 停止';
+            toggleBtn.className = "bg-rose-600 hover:bg-rose-700 text-white text-xs px-4 py-2 rounded-lg font-medium transition shadow-sm flex items-center gap-1.5";
+            lucide.createIcons();
+
+            codeReader.decodeFromConstraints(constraints, 'video-preview', (result, err) => {
+                if (result) {
+                    handleScannedCode(result.text, result.formatName || 'QR_CODE');
+                }
+            }).catch(err => {
+                console.error(err);
+                showToast(cameraErrorMessage(err), 'error');
+                stopScanner();
+            });
+        }
+
+        function stopScanner() {
+            if (codeReader) codeReader.reset();
+            isScanning = false;
+            const placeholder = document.getElementById('scanner-placeholder');
+            const toggleBtn = document.getElementById('scan-toggle-btn');
+            placeholder.classList.remove('hidden');
+            toggleBtn.innerHTML = '<i data-lucide="play" class="w-3.5 h-3.5"></i> 開始';
+            toggleBtn.className = "bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-4 py-2 rounded-lg font-medium transition shadow-sm flex items-center gap-1.5";
+            lucide.createIcons();
+        }
+
+        function handleScannedCode(codeText, formatName) {
+            document.getElementById('input-code').value = codeText;
+            
+            const typeSelect = document.getElementById('input-type');
+            let found = false;
+            for (let i = 0; i < typeSelect.options.length; i++) {
+                if (typeSelect.options[i].value === formatName) {
+                    typeSelect.selectedIndex = i;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                const opt = document.createElement('option');
+                opt.value = formatName;
+                opt.textContent = formatName;
+                typeSelect.appendChild(opt);
+                typeSelect.value = formatName;
+            }
+
+            showToast(`コードを読み取りました: ${codeText}`);
+            
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.frequency.value = 800;
+                gain.gain.setValueAtTime(0.1, ctx.currentTime);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.1);
+            } catch (e) {}
+        }
+
+        function decodeImageFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onload = function() {
+                    if (!codeReader) codeReader = new ZXing.BrowserMultiFormatReader();
+                    codeReader.decodeFromImageElement(img)
+                        .then(result => {
+                            handleScannedCode(result.text, result.formatName || 'IMAGE_CODE');
+                        })
+                        .catch(err => {
+                            showToast('画像からコードを検出できませんでした', 'error');
+                        });
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // Form submission for scanner tab
+        async function handleFormSubmit(event) {
+            event.preventDefault();
+            const btn = document.getElementById('save-btn');
+            btn.disabled = true;
+            btn.innerHTML = '保存中...';
+
+            const payload = {
+                code: document.getElementById('input-code').value,
+                type: document.getElementById('input-type').value || 'QR_CODE',
+                name: document.getElementById('input-name').value,
+                category: document.getElementById('input-category').value,
+                price: document.getElementById('input-price').value,
+                notes: document.getElementById('input-notes').value
+            };
+
+            try {
+                const res = await apiSaveItem(payload);
+                if (res.success) {
+                    showToast(res.message);
+                    document.getElementById('save-form').reset();
+                    document.getElementById('input-type').value = 'QR_CODE';
+                    document.getElementById('input-price').value = '0';
+                } else {
+                    showToast(res.error, 'error');
+                }
+            } catch (err) {
+                showToast('通信エラーが発生しました: ' + err.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i data-lucide="cloud-upload" class="w-4 h-4"></i> スプレッドシートに保存';
+                lucide.createIcons();
+            }
+        }
+
+        // ================= GENERATOR TAB LOGIC =================
+        function setGenType(type) {
+            genType = type;
+            const btnQr = document.getElementById('btn-type-qr');
+            const btnBar = document.getElementById('btn-type-barcode');
+            const formatContainer = document.getElementById('barcode-format-container');
+
+            if (type === 'qr') {
+                btnQr.className = "py-2.5 px-4 rounded-xl border-2 font-medium text-sm transition flex items-center justify-center gap-2 border-indigo-500 bg-indigo-500/10 text-indigo-300";
+                btnBar.className = "py-2.5 px-4 rounded-xl border-2 font-medium text-sm transition flex items-center justify-center gap-2 border-slate-800 bg-slate-950 text-slate-400 hover:border-slate-700";
+                formatContainer.classList.add('hidden');
+            } else {
+                btnBar.className = "py-2.5 px-4 rounded-xl border-2 font-medium text-sm transition flex items-center justify-center gap-2 border-indigo-500 bg-indigo-500/10 text-indigo-300";
+                btnQr.className = "py-2.5 px-4 rounded-xl border-2 font-medium text-sm transition flex items-center justify-center gap-2 border-slate-800 bg-slate-950 text-slate-400 hover:border-slate-700";
+                formatContainer.classList.remove('hidden');
+            }
+            generatePreview();
+        }
+
+        function generatePreview() {
+            const text = document.getElementById('gen-text').value.trim();
+            const name = document.getElementById('gen-name').value.trim() || 'プレビュー名';
+            const price = document.getElementById('gen-price').value || 0;
+            const qrContainer = document.getElementById('qrcode-container');
+            const barcodeCanvas = document.getElementById('barcode-canvas');
+            const placeholder = document.getElementById('preview-placeholder');
+            
+            document.getElementById('preview-name-display').textContent = name;
+            document.getElementById('preview-price-display').textContent = `¥${Number(price).toLocaleString()}`;
+            document.getElementById('preview-code-display').textContent = text || '---';
+
+            qrContainer.innerHTML = '';
+
+            if (!text) {
+                placeholder.classList.remove('hidden');
+                barcodeCanvas.classList.add('hidden');
+                return;
+            }
+
+            placeholder.classList.add('hidden');
+
+            if (genType === 'qr') {
+                barcodeCanvas.classList.add('hidden');
+                qrContainer.classList.remove('hidden');
+                try {
+                    new QRCode(qrContainer, {
+                        text: text,
+                        width: 150,
+                        height: 150,
+                        colorDark: "#0f172a",
+                        colorLight: "#ffffff",
+                        correctLevel: QRCode.CorrectLevel.H
+                    });
+                } catch(e) { console.error(e); }
+            } else {
+                qrContainer.classList.add('hidden');
+                barcodeCanvas.classList.remove('hidden');
+                const format = document.getElementById('gen-barcode-format').value;
+                try {
+                    JsBarcode(barcodeCanvas, text, {
+                        format: format,
+                        lineColor: "#0f172a",
+                        width: 2,
+                        height: 80,
+                        displayValue: true
+                    });
+                } catch(e) {
+                    console.error(e);
+                    placeholder.textContent = "無効なバーコード形式です";
+                    placeholder.classList.remove('hidden');
+                    barcodeCanvas.classList.add('hidden');
+                }
+            }
+        }
+
+        document.getElementById('gen-barcode-format').addEventListener('change', generatePreview);
+        document.getElementById('gen-price').addEventListener('input', generatePreview);
+
+        async function saveGeneratedItem() {
+            const text = document.getElementById('gen-text').value.trim();
+            const name = document.getElementById('gen-name').value.trim();
+            
+            if (!text || !name) {
+                showToast('コードとアイテム名を入力してください', 'error');
+                return;
+            }
+
+            const payload = {
+                code: text,
+                type: genType === 'qr' ? 'QR_CODE' : document.getElementById('gen-barcode-format').value,
+                name: name,
+                category: document.getElementById('gen-category').value,
+                price: document.getElementById('gen-price').value,
+                notes: 'Generated via App'
+            };
+
+            try {
+                const res = await apiSaveItem(payload);
+                if (res.success) {
+                    showToast('スプレッドシートに正常に登録しました！');
+                } else {
+                    showToast(res.error, 'error');
+                }
+            } catch (err) {
+                showToast('エラー: ' + err.message, 'error');
+            }
+        }
+
+        function downloadCodeImage() {
+            let dataUrl = '';
+            if (genType === 'qr') {
+                const img = document.querySelector('#qrcode-container img');
+                const canvas = document.querySelector('#qrcode-container canvas');
+                if (img) dataUrl = img.src;
+                else if (canvas) dataUrl = canvas.toDataURL('image/png');
+            } else {
+                const canvas = document.getElementById('barcode-canvas');
+                dataUrl = canvas.toDataURL('image/png');
+            }
+
+            if (!dataUrl) {
+                showToast('ダウンロードする画像がありません', 'error');
+                return;
+            }
+
+            const a = document.createElement('a');
+            a.href = dataUrl;
+            a.download = `code_${document.getElementById('gen-text').value || 'item'}.png`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            showToast('画像をダウンロードしました');
+        }
+
+        // ================= DATABASE TAB LOGIC =================
+        function renderDatabaseTable(items) {
+            const tbody = document.getElementById('database-tbody');
+            if (!items || items.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="8" class="p-8 text-center text-slate-500">データがありません</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = items.map(item => `
+                <tr class="hover:bg-slate-800/50 transition">
+                    <td class="p-3.5 text-xs text-slate-400 whitespace-nowrap">${item.timestamp}</td>
+                    <td class="p-3.5 font-mono font-medium text-slate-200">${escapeHtml(item.code)}</td>
+                    <td class="p-3.5"><span class="px-2.5 py-1 bg-indigo-500/10 text-indigo-400 rounded-full text-xs font-semibold border border-indigo-500/20">${escapeHtml(item.type)}</span></td>
+                    <td class="p-3.5 font-semibold text-slate-100">${escapeHtml(item.name)}</td>
+                    <td class="p-3.5 text-slate-300">${escapeHtml(item.category)}</td>
+                    <td class="p-3.5 font-bold text-indigo-400">¥${Number(item.price || 0).toLocaleString()}</td>
+                    <td class="p-3.5 text-slate-400 max-w-xs truncate">${escapeHtml(item.notes || '-')}</td>
+                    <td class="p-3.5 text-right whitespace-nowrap">
+                        <button onclick="deleteRow('${item.code}')" class="text-rose-400 hover:text-rose-300 p-1.5 rounded-lg transition hover:bg-slate-800" title="削除">
+                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                        </button>
+                    </td>
+                </tr>
+            `).join('');
+            lucide.createIcons();
+        }
+
+        async function loadDatabase() {
+            const tbody = document.getElementById('database-tbody');
+            tbody.innerHTML = `<tr><td colspan="8" class="p-8 text-center text-slate-500">データを読み込んでいます...</td></tr>`;
+            try {
+                dbItems = await apiGetItems();
+                renderDatabaseTable(dbItems);
+            } catch (err) {
+                tbody.innerHTML = `<tr><td colspan="8" class="p-8 text-center text-rose-400">読み込みに失敗しました: ${escapeHtml(err.message)}</td></tr>`;
+            }
+        }
+
+        function filterDatabase() {
+            const query = document.getElementById('search-filter').value.toLowerCase();
+            const filtered = dbItems.filter(item => 
+                item.name.toLowerCase().includes(query) || 
+                item.code.toLowerCase().includes(query) ||
+                item.category.toLowerCase().includes(query)
+            );
+            renderDatabaseTable(filtered);
+        }
+
+        async function deleteRow(code) {
+            if (!window.confirm(`コード "${code}" を削除してもよろしいですか？`)) return;
+
+            try {
+                const res = await apiDeleteItem(code);
+                if (res.success) {
+                    showToast('削除しました');
+                    loadDatabase();
+                } else {
+                    showToast(res.error, 'error');
+                }
+            } catch (err) {
+                showToast('削除エラー: ' + err.message, 'error');
+            }
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+    </script>
+</body>
+</html>
