@@ -13,7 +13,7 @@
  *    下の API_BASE_URL に貼り付けてください。
  */
 
-const API_BASE_URL = "ここにGASのウェブアプリURL（/exec で終わるもの）を貼り付けてください";
+const API_BASE_URL = "https://script.google.com/macros/s/AKfycbzHIMQ3vzRwsxJHxH8a7R7SaCdCcWMCIyUflwXCSSxAFrYYBE5Wg8tySbr3Xa1-GknY/exec";
 
 function ensureApiConfigured_() {
     if (!API_BASE_URL || API_BASE_URL.indexOf('ここに') === 0 || API_BASE_URL.indexOf('/exec') === -1) {
