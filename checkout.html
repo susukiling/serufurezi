@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="ja" class="h-full bg-slate-950">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>セルフレジ・スキャナー</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- ZXing Barcode Scanner Library (バージョン固定: decodeFromConstraints を利用するため) -->
+    <script type="text/javascript" src="https://unpkg.com/@zxing/library@0.20.0"></script>
+    <!-- Google スプレッドシート(GAS)連携用の共通APIクライアント -->
+    <script src="gas-api.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap');
+        body { font-family: 'Outfit', sans-serif; }
+        .glow-effect {
+            box-shadow: 0 0 35px -5px rgba(99, 102, 241, 0.25);
+        }
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #090d16;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #1e293b;
+            border-radius: 9999px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #334155;
+        }
+    </style>
+</head>
+<body class="h-full text-slate-100 flex flex-col justify-between bg-slate-950 overflow-y-auto lg:overflow-hidden">
+
+    <header class="bg-slate-900/90 backdrop-blur-md border-b border-slate-800/80 px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between shrink-0 gap-2">
+        <div class="flex items-center space-x-3 min-w-0">
+            <div class="p-2 sm:p-2.5 bg-indigo-500/10 text-indigo-400 rounded-2xl border border-indigo-500/20 shadow-inner shrink-0">
+                <i data-lucide="scan-line" class="w-5 h-5 sm:w-6 sm:h-6"></i>
+            </div>
+            <div class="min-w-0">
+                <h1 class="text-base sm:text-lg font-bold tracking-tight text-slate-100 truncate">セルフチェックアウト</h1>
+                <p class="text-[11px] sm:text-xs text-slate-400 truncate">バーコードをかざして商品をスキャンしてください</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-3 shrink-0">
+            <div class="px-3 sm:px-4 py-2 bg-slate-950 border border-slate-800 rounded-xl text-[11px] sm:text-xs font-medium text-slate-300 flex items-center gap-2 whitespace-nowrap">
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shadow-sm shadow-emerald-500/50"></span> <span class="hidden sm:inline">システム稼働中</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 overflow-y-auto lg:overflow-hidden">
+        
+        <!-- Left Column: Camera / Scanner & Manual lookup -->
+        <div class="lg:col-span-7 flex flex-col gap-4 sm:gap-6 lg:h-full">
+            <div class="bg-slate-900/60 backdrop-blur border border-slate-800/80 rounded-3xl p-4 sm:p-6 flex-1 flex flex-col relative overflow-hidden glow-effect min-h-[260px]">
+                <div class="flex justify-between items-center mb-4 z-10">
+                    <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-2">
+                        <i data-lucide="camera" class="w-4 h-4 text-indigo-400"></i> バーコード・QRスキャナー
+                    </h2>
+                    <button onclick="toggleScanner()" id="kiosk-scan-btn" class="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-xl text-sm font-semibold transition shadow-lg shadow-indigo-600/30 flex items-center gap-2">
+                        <i data-lucide="play" class="w-4 h-4"></i> スキャン開始
+                    </button>
+                </div>
+
+                <!-- Video Viewport -->
+                <div class="relative flex-1 bg-slate-950 rounded-2xl overflow-hidden border border-slate-800 flex items-center justify-center">
+                    <video id="kiosk-video" class="w-full h-full object-cover" playsinline webkit-playsinline muted autoplay></video>
+                    <div class="absolute inset-0 border-2 border-indigo-500/40 m-16 rounded-2xl pointer-events-none flex items-center justify-center">
+                        <div class="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-indigo-500 rounded-tl-xl"></div>
+                        <div class="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-indigo-500 rounded-tr-xl"></div>
+                        <div class="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-indigo-500 rounded-bl-xl"></div>
+                        <div class="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-indigo-500 rounded-br-xl"></div>
+                        <span class="bg-slate-900/90 text-indigo-300 text-xs px-4 py-2 rounded-full border border-indigo-500/30 font-medium">
+                            スキャンエリア
+                        </span>
+                    </div>
+                    <div id="kiosk-placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-slate-500 p-6 text-center bg-slate-950">
+                        <i data-lucide="scan" class="w-16 h-16 mb-3 text-slate-700 animate-pulse"></i>
+                        <p class="text-sm font-medium text-slate-400">「スキャン開始」を押してカメラを有効化してください</p>
+                    </div>
+                </div>
+
+                <!-- Manual Code Input Fallback -->
+                <div class="mt-4 pt-4 border-t border-slate-800/80 flex gap-3">
+                    <input type="text" id="manual-code-input" placeholder="またはバーコード/コードを手動入力..." class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-mono transition">
+                    <button onclick="lookupAndAddManual()" class="bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 px-6 py-3 rounded-xl font-semibold text-sm transition shadow-sm">
+                        追加
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column: Cart / Checkout Panel -->
+        <div class="lg:col-span-5 flex flex-col lg:h-full bg-slate-900/60 backdrop-blur border border-slate-800/80 rounded-3xl p-4 sm:p-6 min-h-[320px]">
+            <div class="flex justify-between items-center pb-4 border-b border-slate-800">
+                <h2 class="text-base font-bold text-white flex items-center gap-2">
+                    <i data-lucide="shopping-cart" class="w-5 h-5 text-indigo-400"></i> お買い物カゴ
+                </h2>
+                <span id="cart-item-count" class="bg-indigo-500/20 text-indigo-400 text-xs px-3 py-1 rounded-full font-semibold border border-indigo-500/30">
+                    0 点
+                </span>
+            </div>
+
+            <!-- Cart Items List -->
+            <div id="cart-items-container" class="flex-1 overflow-y-auto py-4 space-y-3 pr-1">
+                <div class="h-full flex flex-col items-center justify-center text-slate-600 text-center p-6">
+                    <i data-lucide="shopping-bag" class="w-12 h-12 mb-2 opacity-40"></i>
+                    <p class="text-sm font-medium">カゴは空です</p>
+                    <p class="text-xs text-slate-600 mt-1">バーコードを読み取ると商品が追加されます</p>
+                </div>
+            </div>
+
+            <!-- Checkout Summary & Action -->
+            <div class="pt-4 border-t border-slate-800 space-y-4">
+                <div class="bg-slate-950/60 rounded-2xl p-4 border border-slate-800/60 space-y-2">
+                    <div class="flex justify-between text-xs text-slate-400">
+                        <span>小計</span>
+                        <span id="cart-subtotal">¥0</span>
+                    </div>
+                    <div class="flex justify-between text-xs text-slate-400">
+                        <span>消費税 (10%)</span>
+                        <span id="cart-tax">¥0</span>
+                    </div>
+                    <div class="flex justify-between text-lg font-bold text-white pt-2 border-t border-slate-800">
+                        <span>合計金額</span>
+                        <span id="cart-total" class="text-indigo-400">¥0</span>
+                    </div>
+                </div>
+
+                <button onclick="checkoutCart()" id="checkout-btn" disabled class="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 text-white font-bold py-4 rounded-2xl transition shadow-xl shadow-indigo-600/20 flex items-center justify-center gap-2 text-base">
+                    <i data-lucide="credit-card" class="w-5 h-5"></i> お会計に進む
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <!-- Modal Notification / Feedback Overlay -->
+    <div id="kiosk-modal" class="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 max-w-md w-full text-center space-y-6 shadow-2xl shadow-indigo-950/50">
+            <div id="modal-icon-container" class="w-20 h-20 bg-indigo-500/10 text-indigo-400 rounded-2xl flex items-center justify-center mx-auto border border-indigo-500/30 shadow-lg shadow-indigo-500/10">
+                <i data-lucide="check" class="w-10 h-10"></i>
+            </div>
+            <div class="space-y-2">
+                <h3 id="modal-title" class="text-xl font-bold text-slate-100">商品を追加しました</h3>
+                <p id="modal-desc" class="text-sm text-slate-400">商品名と価格が表示されます</p>
+            </div>
+            <button id="modal-action-btn" onclick="closeModal()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3.5 rounded-xl transition shadow-lg shadow-indigo-600/25">
+                続ける
+            </button>
+        </div>
+    </div>
+
+    <script>
+        lucide.createIcons();
+
+        let codeReader = null;
+        let isScanning = false;
+        let cart = [];
+        let allDatabaseItems = [];
+        let lastScanCode = null;
+        let lastScanTime = 0;
+
+        // コードの一致判定。
+        // Googleスプレッドシートが数字だけのコード（先頭0のバーコードなど）を
+        // 自動的に数値へ変換し、先頭の0が失われるケースにも対応できるよう、
+        // 完全一致がだめな場合は数値としての比較もフォールバックで行う。
+        function codesMatch(a, b) {
+            const sa = String(a == null ? '' : a).trim();
+            const sb = String(b == null ? '' : b).trim();
+            if (sa === '' || sb === '') return false;
+            if (sa === sb) return true;
+            if (!isNaN(sa) && !isNaN(sb)) return Number(sa) === Number(sb);
+            return false;
+        }
+        let isCheckoutModalActive = false;
+
+        window.addEventListener('load', () => {
+            try {
+                codeReader = new ZXing.BrowserMultiFormatReader();
+                loadSheetInventory();
+            } catch(e) {
+                console.error("ZXing init error:", e);
+            }
+        });
+
+        async function loadSheetInventory() {
+            try {
+                allDatabaseItems = await apiGetItems();
+            } catch (err) {
+                console.error(err);
+                showModalError('データ取得エラー', 'スプレッドシートの商品データを取得できませんでした。API_BASE_URLの設定をご確認ください。');
+            }
+        }
+
+        function toggleScanner() {
+            if (isScanning) {
+                stopScanner();
+            } else {
+                startScanner();
+            }
+        }
+
+        async function startScanner() {
+            if (!codeReader) return;
+            const placeholder = document.getElementById('kiosk-placeholder');
+            const btn = document.getElementById('kiosk-scan-btn');
+            
+            placeholder.classList.add('hidden');
+
+            const constraints = { video: { facingMode: 'environment' } };
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                stream.getTracks().forEach(track => track.stop());
+            } catch (permErr) {
+                console.error("Kiosk permission error:", permErr);
+                let errorMsg = 'カメラへのアクセスが拒否されました。ブラウザの設定からカメラ権限を許可してください。';
+                if (permErr.name === 'NotAllowedError' || permErr.name === 'PermissionDeniedError') {
+                    errorMsg = 'カメラの使用許可が拒否されました。ブラウザの設定をご確認ください。';
+                }
+                showModalError('カメラ権限エラー', errorMsg);
+                stopScanner();
+                return;
+            }
+
+            isScanning = true;
+            btn.innerHTML = '<i data-lucide="square" class="w-4 h-4"></i> 停止';
+            btn.className = "bg-rose-600 hover:bg-rose-500 text-white px-5 py-2 rounded-xl text-sm font-semibold transition shadow-lg shadow-rose-600/30 flex items-center gap-2";
+            lucide.createIcons();
+
+            try {
+                await codeReader.decodeFromConstraints(constraints, 'kiosk-video', (result, err) => {
+                    if (result) {
+                        processScannedCode(result.text);
+                    }
+                });
+            } catch (err) {
+                console.error("Kiosk camera start error:", err);
+                let errorMsg = 'カメラの起動に失敗しました。';
+                if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                    errorMsg = 'カメラの使用許可が拒否されました。ブラウザの設定をご確認ください。';
+                } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+                    errorMsg = 'デバイスにカメラが見つかりません。';
+                } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+                    errorMsg = 'カメラが他のアプリケーションで使用中の可能性があります。';
+                }
+                showModalError('カメラエラー', errorMsg);
+                stopScanner();
+            }
+        }
+
+        function stopScanner() {
+            if (codeReader) codeReader.reset();
+            isScanning = false;
+            const placeholder = document.getElementById('kiosk-placeholder');
+            const btn = document.getElementById('kiosk-scan-btn');
+            placeholder.classList.remove('hidden');
+            btn.innerHTML = '<i data-lucide="play" class="w-4 h-4"></i> スキャン開始';
+            btn.className = "bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-xl text-sm font-semibold transition shadow-lg shadow-indigo-600/30 flex items-center gap-2";
+            lucide.createIcons();
+        }
+
+        function lookupAndAddManual() {
+            const codeInput = document.getElementById('manual-code-input');
+            const code = codeInput.value.trim();
+            if (!code) return;
+            processScannedCode(code, { skipCooldown: true });
+            codeInput.value = '';
+        }
+
+        function processScannedCode(code, options = {}) {
+            const trimmedCode = String(code || '').trim();
+            if (!trimmedCode) return;
+
+            // 同じコードを連続して読み取ってしまうことによる
+            // 二重登録・エラーの連発を防ぐ（手動追加はこの制限をスキップ）
+            const now = Date.now();
+            if (!options.skipCooldown && trimmedCode === lastScanCode && (now - lastScanTime) < 1500) {
+                return;
+            }
+            lastScanCode = trimmedCode;
+            lastScanTime = now;
+
+            const found = allDatabaseItems.find(i => codesMatch(i.code, trimmedCode));
+
+            if (!found) {
+                showModalError('未登録のコードです', `このコード（${trimmedCode}）はスプレッドシートに登録されていません。管理画面から登録してから、もう一度お試しください。`);
+                playTone(220, 0.2);
+                return;
+            }
+
+            const itemName = found.name;
+            const itemPrice = Number(found.price || 0);
+
+            const existing = cart.find(i => i.code === trimmedCode);
+            if (existing) {
+                existing.quantity += 1;
+            } else {
+                cart.push({
+                    code: trimmedCode,
+                    name: itemName,
+                    price: itemPrice,
+                    quantity: 1
+                });
+            }
+
+            renderCart();
+            showModal(itemName, itemPrice);
+            playTone(900, 0.12);
+        }
+
+        function playTone(freq, duration) {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.frequency.value = freq;
+                gain.gain.setValueAtTime(0.15, ctx.currentTime);
+                osc.start();
+                osc.stop(ctx.currentTime + duration);
+            } catch (e) {}
+        }
+
+        function renderCart() {
+            const container = document.getElementById('cart-items-container');
+            const countEl = document.getElementById('cart-item-count');
+            const subtotalEl = document.getElementById('cart-subtotal');
+            const taxEl = document.getElementById('cart-tax');
+            const totalEl = document.getElementById('cart-total');
+            const checkoutBtn = document.getElementById('checkout-btn');
+
+            const totalCount = cart.reduce((acc, item) => acc + item.quantity, 0);
+            countEl.textContent = `${totalCount} 点`;
+
+            if (cart.length === 0) {
+                container.innerHTML = `
+                    <div class="h-full flex flex-col items-center justify-center text-slate-600 text-center p-6">
+                        <i data-lucide="shopping-bag" class="w-12 h-12 mb-2 opacity-40"></i>
+                        <p class="text-sm font-medium">カゴは空です</p>
+                        <p class="text-xs text-slate-600 mt-1">バーコードを読み取ると商品が追加されます</p>
+                    </div>
+                `;
+                subtotalEl.textContent = '¥0';
+                taxEl.textContent = '¥0';
+                totalEl.textContent = '¥0';
+                checkoutBtn.disabled = true;
+                lucide.createIcons();
+                return;
+            }
+
+            checkoutBtn.disabled = false;
+            let subtotal = 0;
+
+            container.innerHTML = cart.map((item, index) => {
+                subtotal += item.price * item.quantity;
+                return `
+                    <div class="bg-slate-950/40 border border-slate-800/80 rounded-2xl p-4 flex items-center justify-between gap-3">
+                        <div class="flex-1 min-w-0">
+                            <h4 class="font-semibold text-white text-sm truncate">${escapeHtml(item.name)}</h4>
+                            <p class="text-xs text-indigo-400 font-medium">¥${item.price.toLocaleString()} × ${item.quantity}</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button onclick="updateQty(${index}, -1)" class="w-8 h-8 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl flex items-center justify-center font-bold text-xs transition">-</button>
+                            <span class="text-sm font-semibold w-6 text-center">${item.quantity}</span>
+                            <button onclick="updateQty(${index}, 1)" class="w-8 h-8 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl flex items-center justify-center font-bold text-xs transition">+</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            const tax = Math.floor(subtotal * 0.1);
+            const total = subtotal + tax;
+
+            subtotalEl.textContent = `¥${subtotal.toLocaleString()}`;
+            taxEl.textContent = `¥${tax.toLocaleString()}`;
+            totalEl.textContent = `¥${total.toLocaleString()}`;
+            lucide.createIcons();
+        }
+
+        function updateQty(index, delta) {
+            cart[index].quantity += delta;
+            if (cart[index].quantity <= 0) {
+                cart.splice(index, 1);
+            }
+            renderCart();
+        }
+
+        function showModal(name, price) {
+            isCheckoutModalActive = false;
+            const modal = document.getElementById('kiosk-modal');
+            const iconContainer = document.getElementById('modal-icon-container');
+            const actionBtn = document.getElementById('modal-action-btn');
+
+            iconContainer.className = "w-20 h-20 bg-indigo-500/10 text-indigo-400 rounded-2xl flex items-center justify-center mx-auto border border-indigo-500/30 shadow-lg shadow-indigo-500/10";
+            iconContainer.innerHTML = '<i data-lucide="check" class="w-10 h-10"></i>';
+            document.getElementById('modal-title').textContent = name;
+            document.getElementById('modal-desc').textContent = `価格: ¥${price.toLocaleString()} をカゴに追加しました`;
+            actionBtn.textContent = '続ける';
+            modal.classList.remove('hidden');
+            lucide.createIcons();
+        }
+
+        function showModalError(title, desc) {
+            isCheckoutModalActive = false;
+            const modal = document.getElementById('kiosk-modal');
+            const iconContainer = document.getElementById('modal-icon-container');
+            const actionBtn = document.getElementById('modal-action-btn');
+
+            iconContainer.className = "w-20 h-20 bg-rose-500/10 text-rose-400 rounded-2xl flex items-center justify-center mx-auto border border-rose-500/30 shadow-lg shadow-rose-500/10";
+            iconContainer.innerHTML = '<i data-lucide="alert-triangle" class="w-10 h-10"></i>';
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('modal-desc').textContent = desc;
+            actionBtn.textContent = '閉じる';
+            modal.classList.remove('hidden');
+            lucide.createIcons();
+        }
+
+        function checkoutCart() {
+            if (cart.length === 0) return;
+            const total = cart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+            const tax = Math.floor(total * 0.1);
+            const grandTotal = total + tax;
+
+            isCheckoutModalActive = true;
+            const modal = document.getElementById('kiosk-modal');
+            const iconContainer = document.getElementById('modal-icon-container');
+            const actionBtn = document.getElementById('modal-action-btn');
+
+            iconContainer.className = "w-20 h-20 bg-emerald-500/10 text-emerald-400 rounded-2xl flex items-center justify-center mx-auto border border-emerald-500/30 shadow-lg shadow-emerald-500/10";
+            iconContainer.innerHTML = '<i data-lucide="credit-card" class="w-10 h-10"></i>';
+            document.getElementById('modal-title').textContent = 'お会計完了';
+            document.getElementById('modal-desc').innerHTML = `お会計合計: <strong class="text-emerald-400">¥${grandTotal.toLocaleString()}</strong>（税込）<br>ご利用ありがとうございました！`;
+            actionBtn.textContent = '完了する';
+            
+            modal.classList.remove('hidden');
+            lucide.createIcons();
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('kiosk-modal');
+            modal.classList.add('hidden');
+
+            if (isCheckoutModalActive) {
+                cart = [];
+                renderCart();
+                isCheckoutModalActive = false;
+            }
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+    </script>
+</body>
+</html>
